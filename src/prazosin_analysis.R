@@ -1,0 +1,1108 @@
+#
+# Prazosin analysis in R
+# Started 8/8/16
+# PH
+#
+
+rm(list = ls())
+library('plyr')
+library('lme4')
+#library('lmerTest')
+library('lsmeans')
+library('pwr')
+
+# redirect output
+#sink("output/R/output.txt")
+
+plotpower <- function(df=NULL, alpha=0.05, power=0.8, n=NULL,
+                      d=NULL, f=NULL) {
+  # Plots power curves for different levels of n and power
+  #   Args:
+  #   Returns:
+  
+  # Partial_eta_squared = F * df_effect / F * df_effect + df_error
+  #
+  # In Soeter and Kindt (2011, Learn Mem), the decreased speed of
+  # extinction under yohimbine can thus be quantified as follows:
+  #
+  # Partial_eta_squared = 6.23 * 7 / 6.23 * 7 + 22
+  #                     = 43.61 / 22 + 43.61
+  #                     = 0.66
+  #
+  # Cohen's f^2 can then be calculated as:
+  #
+  # f^2                 = eta_p^2 / 1 - eta_p^2
+  #                     = 0.66 / 0.34
+  #                     = 1.94
+  # f                   = sqrt(1.94)
+  # f                   = 1.39
+  #                   
+  #
+  # For the difference in acquisition, there is no precise F-value; but
+  # if we, conservatively, assume an upper bound of 0.99, we get:
+  #
+  #
+  # Partial_eta_squared = 0.99 * 1 / 0.99 * 1 + 28
+  #                     = 0.99 / 28 + 0.99
+  #                     = 0.03
+  #
+  # f^2                 = 0.03 / 0.97
+  #                     = 0.03
+  # f                   = 0.17 
+  #
+  # For the paper from 2012 (Neuropsychopharmacol), where no significant
+  # differences between groups in acquisition are again demonstrated,
+  # the F-value was 2.09, resulting in an effect size of f^2=0.07 and
+  # f=0.26. Regarding extinction, the effect size was f=0.87.
+  #
+  # Original effect size for extinction
+  pwe <- pwr.anova.test(k=2, n=NULL, f=1.39, sig.level=0.05, power=0.9) 
+  print(pwe)
+
+  # Effect size for extinction in 2012 paper
+  pwe <- pwr.anova.test(k=2, n=NULL, f=0.87, sig.level=0.05, power=0.9) 
+  print(pwe)
+
+  # Conservative lower bound would be:
+  pwe <- pwr.anova.test(k=2, n=NULL, f=0.5,  sig.level=0.05, power=0.9) 
+  print(pwe)
+
+  # Effect size for difference in acquisition
+  pwa <- pwr.anova.test(k=2, n=NULL, f=0.17, sig.level=0.05, power=0.9) 
+  print(pwa)
+
+  # Effect size for difference in acquisition in 2012 paper
+  pwa <- pwr.anova.test(k=2, n=NULL, f=0.26, sig.level=0.05, power=0.9) 
+  print(pwa)
+
+  # Convert to Cohen's d
+  # f^2 = d^2 / 2k
+  #   d = sqrt(2k * f^2)
+  #   d = sqrt(2k) * f
+  #
+  # Thus, to calculate the expected strength of the difference between
+  # extinction and acquisition, we transform the conservative sizes of
+  # both effect sizes to cohen's d and subtract them:
+  #
+  #   d = 0.87 * 2 - 0.20 * 2
+  #   d = 1.22
+  pwi <- pwr.t.test(n=NULL, d=1.22, sig.level=0.05, power=0.9) 
+  print(pwi)
+  pwi <- pwr.t.test(n=NULL, d=1.0, sig.level=0.05, power=0.9) 
+  print(pwi)
+}
+
+readdat <- function(df=NULL, fn=NULL, resptype="cr",
+                    exclids=c(25, 28)) {
+  #
+  #
+  if (is.null(fn)) fn <- "../data/prazosin.csv"
+  if (is.null(df)) df <- read.csv(fn)
+
+  switch(resptype,
+         cr = {
+           df <- subset(df, stim=="CSplus"|stim=="CSminus")
+         },
+         ur = {
+           df <- subset(df, stim=="CSplusUS")
+         },
+         crur = {
+           df <- subset(df, !stim=="")
+         })
+
+  df$phase[df$stage=="Acquisition"&df$ctrial<5] <- "early"
+  df$phase[df$stage=="Acquisition"&df$ctrial>4] <- "late"
+  df$phase[df$stage=="Extinction" &df$ctrial<6&df$stim=="CSplus"]  <- "early"
+  df$phase[df$stage=="Extinction" &df$ctrial>5&df$stim=="CSplus"]  <- "late"
+  df$phase[df$stage=="Extinction" &df$ctrial<7&df$stim=="CSminus"] <- "early"
+  df$phase[df$stage=="Extinction" &df$ctrial>6&df$stim=="CSminus"] <- "late"
+  df$phase[df$stage=="Retrieval"  &df$ctrial<6&df$stim=="CSplus"]  <- "early"
+  df$phase[df$stage=="Retrieval"  &df$ctrial>5&df$stim=="CSplus"]  <- "late"
+  df$phase[df$stage=="Retrieval"  &df$ctrial<7&df$stim=="CSminus"] <- "early"
+  df$phase[df$stage=="Retrieval"  &df$ctrial>6&df$stim=="CSminus"] <- "late"
+
+  # this is to remove first CS- (which shouldn't be done)
+  #df$phase[df$stage=="Extinction" &df$ctrial==1&df$stim=="CSminus"] <- NA 
+  #df$phase[df$stage=="Retrieval"  &df$ctrial==1&df$stim=="CSminus"] <- NA
+
+  #df$phase[df$stage=="Extinction" &df$ctrial<5] <- "early"
+  #df$phase[df$stage=="Extinction" &df$ctrial>4] <- "late"
+  #df$phase[df$stage=="Retrieval"  &df$ctrial<5] <- "early"
+  #df$phase[df$stage=="Retrieval"  &df$ctrial>4] <- "late"
+
+  # factorize factors
+
+  # factorize factors
+  df$ID    <- factor(df$ID)
+  df$group <- factor(df$group)
+  df$stage <- factor(df$stage)
+  df$stim  <- factor(df$stim)
+
+  # create transformed dependent variable
+  df$sqrtdcm1  <- sqrt(df$DCM1)
+  df$logdcm1   <- log10(df$DCM1+1)
+  df$lndcm1    <- log(df$DCM1+1)
+
+  # mean-center the trial-variable
+  df$ctrialc   <- df$ctrial - (4.5 + 1*(df$day>1) + 0.5 *
+                                     (df$stim=="CSminus"&df$day>1))
+
+  if (!is.null(exclids)) df <- subset(df, !ID %in% exclids)
+  return(df) 
+}
+
+calcstages <- function(df=NULL) {
+  # Summarize outcome by group, stage, phase, and stim
+  #   Args:
+  #     df: data frame
+  #   Returns:
+  #     out: updated data frame
+  dfms     <- ddply(df, c("group", "stage", "phase", "stim", "ID"),
+                    summarize,
+                    n=sum(!is.na(outcome)),
+                    m=mean(outcome, na.rm=TRUE),
+                    sd=sd(outcome, na.rm=TRUE), se=sd/sqrt(n))
+  dfmsd    <- ddply(dfms, c("group", "stage", "phase", "ID"),
+                    summarize,
+                    mdiff=diff(m))
+
+  
+  dfm      <- ddply(dfmsd, c("group", "stage", "phase"),
+                    summarize,
+                    n=sum(!is.na(mdiff)),
+                    m=mean(mdiff, na.rm=TRUE),
+                    sd=sd(mdiff, na.rm=TRUE),
+                    se=sd/sqrt(n))
+                          
+  ncp         <- abs(qt(0.05/2, 19-1))
+  dfm$ci      <- dfm$se * ncp
+  #dfm.diff    <- ddply(dfm, c("group", "stage", "phase"), summarize,
+  #                     mdiff=diff(M), sd=(sqrt(sum(SD^2))),
+  #                     se=sd/sqrt(N))
+  #dfm.diff$ci <- dfm.diff$se * ncp
+
+  # No phases
+  dfmsp     <- ddply(df, c("group", "stage", "stim", "ID"),
+                    summarize,
+                    n=sum(!is.na(outcome)),
+                    m=mean(outcome, na.rm=TRUE),
+                    sd=sd(outcome, na.rm=TRUE), se=sd/sqrt(n))
+
+  dfmspd    <- ddply(dfmsp, c("group", "stage", "ID"),
+                     summarize,
+                     mdiff=diff(m))
+  
+  dfmp      <- ddply(dfmspd, c("group", "stage"),
+                    summarize,
+                    n=sum(!is.na(mdiff)),
+                    m=mean(mdiff, na.rm=TRUE),
+                    sd=sd(mdiff, na.rm=TRUE),
+                    se=sd/sqrt(n))
+  dfmp$ci     <- dfmp$se * ncp
+                          
+  out         <- list(dfms, dfmsd, dfm, dfmsp, dfmspd, dfmp)
+  return(out)
+}
+  
+plotgsp <- function(df=NULL, outcome="logdcm1", lb=NULL) {
+  # Plot overview by group, stage, phase
+  #
+  # Args:
+  # Returns:
+  tmp <- par(mar=c(14, 8, 2, 2))
+  dfm$ctrial <- c(1:length(dfm$m)) 
+  dfm$eb <- dfm$ci
+  mxys <- max(dfm$m) * 1.9
+  mnys <- mxys * -0.5
+  tmp <- plot(x=dfm$ctrial, y=dfm$m, axes=FALSE,
+              xlab="", ylab="", col="white", ylim=c(mnys, mxys))
+  tmp <- axis(1, at=c(1:length(dfm$m)), labels=paste(dfm$group, dfm$stage, dfm$phase),
+              las=3, cex=0.5, font=2)
+  tmp <- abline(h=0, lwd=1.5, lty=3)
+  tmp <- axis(2)
+  tmp <- mtext(paste(ylab, "mean with 95% CI"), 2, 3, font=2)
+  tmp <- plotscr(df=dfm, l=FALSE, lwd=2, pch=19)
+}
+
+createfulldf <- function(df=NULL) {
+  # Uses group/stage/phase/stim summaries and merges them with df
+  #
+  # Args:
+  # Returns:
+  
+  out <- calcstages(p)
+  dfm <- out[[2]]
+  dfm$stimdiff <- dfm$mdiff
+  dfmm <- subset(dfm, stage=="Acquisition"&((phase=="early"|phase=="late")&stimdiff>0))
+  dfmm$ID <- factor(dfmm$ID)
+  ids <- dfmm$ID
+}
+
+getposacqids <- function(df=NULL) {
+  # Lists all ids with non-positive stimulus differentiation during acq
+  out <- calcstages(p)
+  dfm <- out[[5]]
+  dfm$stimdiff <- dfm$mdiff
+  dfmm <- subset(dfm, stage=="Acquisition"&stimdiff>0)
+  dfmm$ID <- factor(dfmm$ID)
+  ids <- dfmm$ID
+  return(ids)
+}       
+
+calcmlm <- function(df=NULL, form=NULL, REML=FALSE) {
+  # Calculates multilevel model
+  # Args:
+  # Returns:
+  if(is.null(df)) df <- readdat()
+  if(is.null(form)) {
+    f <- "outcome ~ ctrialc + group*stage*stim + (1+stage*stim|ID)"
+    form <- as.formula(f)
+  }
+  model <- lmer(form, df, REML=REML)
+  return(model)
+}
+
+teststagestim <- function(df=NULL) {
+  # Test stimulus effect stages bottom up
+  #
+
+  y1 <- subset(df, stim=="CSminus")$m
+  y2 <- subset(df, stim=="CSplus")$m
+  print(t.test((y2-y1)))
+
+  # effect size
+  return(mean(y2-y1, na.rm=TRUE)/sd(y2-y1, na.rm=TRUE))
+}
+
+
+plotscr <- function(df, l=TRUE, lty=1, lwd=1, p=TRUE, pch=1,
+                    eb=TRUE, lcol="black", cex=1.0) {
+  # Plots points, lines, and error bars of a scr-dataframe
+  #
+  # Args:
+  #   df:   should include: ctrial, m, (se)
+  #   l:    plot lines (default=TRUE)
+  #   lwd:  line width (default=1)
+  #   p:    plot points (default=TRUE)
+  #   pch:  format of points (default=1)
+  #   eb:   plot error bars (default=TRUE)
+  #   lcol: line color (default=black) 
+  #   cex:  size
+  #
+  # Returns:
+  #   
+  if (l == TRUE) {
+    l       <- lines(df$ctrial, df$m, cex=cex, lwd=lwd, col=lcol,
+                     lty=lty)
+  }
+
+  if (p == TRUE) {
+    plt     <- points(df$ctrial, df$m,
+                     type="p", pch=pch,
+                     cex=cex) 
+  }
+        
+  if (eb == TRUE) {
+    mses    <- df$m - df$eb
+    pses    <- df$m + df$eb
+    a       <- arrows(df$ctrial, mses, df$ctrial, pses, length=0.00,
+                      angle=90, code=3, lwd=lwd)
+  }
+}
+
+
+plottrialwise <- function(df=NULL, mxyp=0.65, mnys=-0.05, mxys=0.6) {
+  # Plot trial-wise data
+
+  p   <- df
+  tmp <- par(mar=c(5, 5, 2, 5),oma=c(8, 4, 4, 0))
+  #tmp <- layout(matrix(c(1, 4, 2, 5, 3, 6), ncol=3))
+  tmp <- layout(matrix(c(1, 4, 2,
+                         5, 3, 6), ncol=3))
+  #layout.show(tmp)
+  x2lb = c("Day 1:\nAcquisition", "Day 2:\nExtinction",
+           "Day 3:\nRe-Extinction")
+  mxy = mxyp
+
+  for (i in 1:nlevels(p$group)) {
+    for (j in 1:nlevels(p$stage)) {
+      print(paste(i, j))
+      pp          <- subset(p, group==levels(p$group)[i]&
+                               stage==levels(p$stage)[j])
+      # create means and se
+      rm          <- ddply(pp, c("ctrial", "stim"),
+                           summarise, n=sum(!is.na(outcome)),
+                           m=mean(outcome, na.rm=TRUE),
+                           sd=sd(outcome, na.rm=TRUE), eb=sd/sqrt(n))
+      #mxy         <- ifelse(max(rm$m)*1.2 > mxy, max(rm$m)*1.2, mxy)
+      #mxy         <- 0.35
+      mxx         <- max(rm$ctrial)
+      rmm         <- subset(rm, stim=='CSminus') 
+      rmp         <- subset(rm, stim=='CSplus') 
+
+      # take care of CS-
+      if (j > 1) {
+        rmm$ctrial <- rmm$ctrial - 1
+      }
+
+      tmp         <- plot(x=rmm$ctrial, y=rmm$m, xlab="", ylab="",
+                          xlim=c(min(rmm$ctrial), mxx),
+                          ylim=c(0.05, mxy), bty="n", las=1, cex=1.8,
+                          cex.axis=1.2)
+      tmp         <- box(lwd=1.5)
+      tmp         <- plotscr(df=rmm, pch=1, lwd=1.2, cex=1.8)
+      tmp         <- plotscr(df=rmp, pch=19, lwd=1.2, cex=1.8)
+
+      legend("topright", inset=0.05,  lty=1, cex=1.4, lwd=1.2,
+             pch=c(19, 1), legend=c("CS+","CS-"),
+             ncol=1, xpd=NA, bty="n")
+      #mtext("Log aSNA Amplitude (units)", 2, 3, font=2, cex=1.0)
+      #mtext("Trial", 1, 3, font=2, cex=1)
+      mtext(ylab, 2, line=4.0, cex=1.0, font=2, las=3)
+      mtext("Trial", 1, line=3.0, cex=1.0, font=2)
+      if (i == 1) {
+        mtext(x2lb[j], 3, 1, cex=1.5, font=2)
+      }
+      if ((i == 1 | i == 2) & j == 3) {
+        text(12.95, mxy/2, labels=levels(p$group)[i], font=2,
+             cex=3.0, srt = -90, xpd=NA)
+      }
+    }
+  }
+}
+
+plotbar <- function(df=NULL, rng, col, xlim, ylim, axes=TRUE,
+                    xpd=TRUE, abl=NULL, main=NULL,
+                    yaxt=NULL, ylb=ylb) {
+  # Bar plots with error bars
+  #
+  #   Args:
+  #
+  #   Returns:
+
+  # create means and se
+  #mxy         <- max(df$m)*1.45
+  #tabbedmeans <- tapply(df$m, factors, function(x) c(x=x))
+  #print(tabbedmeans)
+  #tabbedeb    <- tapply(df$eb, factors, function(x) c(x=x))
+
+  m <- matrix(ncol=2, nrow=2, df$m[rng]) 
+  e <- matrix(ncol=2, nrow=2, df$eb[rng]) 
+  #colnames(m) <- rep(levels(df$group), 1)
+  colnames(m) <- c("Plac", "Praz")
+  rownames(m) <- levels(df$stim)
+  colnames(e) <- rep(levels(df$group), 1)
+  rownames(e) <- levels(df$stim)
+
+  #plotbar(matmean=m, mateb=e, ylim=ylim, col=c("gray54", "white"),
+  #        main=main, yaxt=yaxt, ylb=ylb)
+
+        
+  barcenters  <- barplot(height=m,
+                         beside=TRUE,
+                         ylim=ylim,
+                         col=col,
+                         space=c(0, 0.2),
+                         main=main,
+                         yaxt=yaxt)
+        
+                        #las=1, axes=axes, col=cols, space=c(0, 0.4),
+                        #cex.names=0.8, ylim=ylim, xpd=xpd)
+    s           <- segments(barcenters, m-e,
+                            barcenters, m+e,
+                            lwd=1.0)
+    a           <- arrows  (barcenters, m-e,
+                            barcenters, m+e,
+                            lwd=1.0, angle=90, code=3, length=0.02)
+  #axis(1, at=1.5, labels="")
+  if (!is.null(abl)) abline(h=abl, lwd=2)
+  mtext(ylb, 2, 3, font=2)
+  #lines(0:6, rep(-0.01, 7), lwd=2)
+  #box(bty="l")
+  #box(bty="7", col="white")
+}
+
+plothist <- function(df=NULL, y="stimdiff", x2lb=NULL) {
+  # Plot various histograms
+  hi <- hist(df[, y], plot=FALSE)
+  hi$density <- hi$counts/sum(hi$counts) * 100
+  plot(hi, col="gray52", xlab="", freq=FALSE,
+       main=x2lb, ylim=c(0, max(hi$density*1.2)), ylab="Percentage")
+}
+
+
+plotcontrasts <- function(model=NULL, fn=NULL, fcts=NULL, cl,
+                          x1lab=NULL, x2lab=NULL, eb="ci",
+                          xlim=c(-0.1, 0.1)) {
+  # Plots custom contrasts
+  #
+  # Args:
+  # Returns:
+
+  # pairwise contrasts to understand 3-way interaction
+  if (!is.null(fn))   tmp   <- pdf(fn)
+  if (is.null(fcts))  fcts  <- c("group", "stage", "stim")
+  if (is.null(model)) model <- calcmlm(REML=TRUE)
+
+  # test custom contrasts
+  par(mar=c(8, 15, 8, 2))
+  lsm       <- lsmeans(model, fcts)
+  tmp       <- print(lsm)
+  lsm.contr <- contrast(lsm, cl)
+  tmp       <- print(summary(lsm.contr))
+  lsm.ci    <- confint(lsm.contr)
+  lsmdf     <- lsm.ci[c("contrast", "estimate", "SE", "lower.CL",
+                        "upper.CL")]
+
+  # create dot plot
+  if (is.null(x1lab)) {
+    x1lab     <- "Log aSNA Amplitude \n (adjusted Means with 95% CI)"
+  }
+  if (is.null(x2lab)) {
+    x2lab     <- "Stimulus discrimination \n (CS+ minus CS-)"
+  }
+  tmp       <- plotdots(lsmdf, xlim=xlim, x1lab=x1lab, x2lab=x2lab, eb)
+  
+  if(!is.null(fn)) dev.off()
+}
+
+plotdots <- function(df=NULL, xlim=c(-0.1, 0.1),
+                     x1lab=NULL, x2lab=NULL, eb="ci") {
+  # Plots forest plot of contrasts
+  # Args:
+  # Returns:
+  tmp <- dotchart(df$estimate, xlim=xlim, pch=19, font.lab=2)
+  for (i in 1:nrow(df)) { 
+    switch(eb,
+           ci = { lines(x=c(df$lower.CL[i], df$upper.CL[i]),
+                        y=c(i, i), lwd=2)},
+           se = { lines(x=c(df$estimate[i] - df$SE[i],
+                            df$estimate[i] + df$SE[i]),
+                        y=c(i, i), lwd=2)})
+  }
+  mtext(x1lab, 1, at=0, font=2, line=3.5)
+  axis(2, at=(1:nrow(df)), labels=paste(df$contrast), las=2)
+  abline(v=0, lwd=1, lty=2)
+  box(lwd=2)
+  mtext(x2lab, 3, at=0, cex=1.1, font=2, line=0.1)
+}
+
+calccovs <- function(df=NULL, covs=NULL) {
+  # Calculates covariates at baseline
+  # Args:
+  # Returns:
+  if (is.null(covs)) {
+    covs <- c("Age", "Gender", "stait", "ShockerLevel",
+              "HeartRateBaseline", "HeartRate90min",
+              "BPSysBaseline", "BPSys90min",
+              "BPDiaBaseline", "BPDia90min")
+  }
+  
+  # restrict to unique rows
+  df <- unique(df[, c("ID", "group", unlist(covs))])
+
+  covfuncs <- c("length","mean","sd")
+
+  for (i in 1:length(covs)) {
+    for (j in 1:nlevels(p$group)) {
+      cat(paste("Covariate: ", covs[i], "\n"))
+      ps <- subset(df, group==levels(df$group)[j])
+      print(length(ps[complete.cases(ps[, covs[i]]), covs[i]]))
+      print(mean  (ps[complete.cases(ps[, covs[i]]), covs[i]]))
+      print(sd    (ps[complete.cases(ps[, covs[i]]), covs[i]]))
+    }
+    print(t.test(df[,covs[i]] ~ df$group))
+  }
+}
+
+doanalysis <- function(df=NULL, covs=NULL,
+                       contrlist=NULL, factors=NULL,
+                       contrfn=NULL, formulas=NULL,
+                       x1lab=NULL, x2lab=NULL, eb="ci",
+                       xlim=c(-0.1, 0.1)) {
+    # Runs the actual analysis
+    # Args:
+    # Returns:
+    if(!is.null(covs)) tmp <- calccovs(df=df, covs=covs)
+
+    m1  <- calcmlm(form=as.formula(forms[1]), df=df,  REML=FALSE)
+    m2  <- calcmlm(form=as.formula(forms[2]), df=df,  REML=FALSE)
+    print(anova(m1, m2))
+
+    # Calculate significance of trial factor
+    m1  <- calcmlm(form=as.formula(forms[2]), df=df,  REML=FALSE)
+    m2  <- calcmlm(form=as.formula(forms[3]), df=df,  REML=FALSE)
+    print(anova(m1, m2))
+
+    # Demonstrate absence of 4-way interaction
+    m1   <- calcmlm(form=as.formula(forms[4]), df=df,  REML=FALSE)
+    print(anova(m1))
+
+    # Rule out potential influence of covariates
+    #p$shockerlevelc <- scale(p$ShockerLevel, center=T)
+    df$staitc <- scale(df$stait, center=T)
+    m1  <- calcmlm(form=as.formula(forms[5]),
+                    df=subset(df, !ID==8),  REML=FALSE)
+    m2  <- calcmlm(form=as.formula(forms[2]),
+                    df=subset(df, !ID==8),  REML=FALSE)
+    print(anova(m1, m2))
+
+    m1  <- calcmlm(form=as.formula(forms[5]),
+                   df=subset(df, !ID==8),  REML=FALSE)
+    m2  <- calcmlm(form=as.formula(forms[6]),
+                   df=subset(df, !ID==8),  REML=FALSE)
+    print(anova(m1, m2))
+
+    # final model
+    m2   <- lmer(as.formula(forms[2]), df, REML=TRUE)
+    tmp  <- plotcontrasts(model=m2, fn=contrfn, cl=contrlist,
+                          fcts=factors, x1lab=x1lab, x2lab=x2lab,
+                          eb=eb, xlim=xlim)
+}
+
+calcmlmwithcov <- function(df, forms=NULL, cov,
+                           center=TRUE, REML=FALSE) {
+  # Calculates multilevel model including cov as covariate
+  #   Args:
+  #   Returns:
+
+  # Do this with lmerTest to make it a little easier to implement
+  #library('lmerTest')
+  for (i in 1:length(cov)) {
+    dfc <- df
+    print(paste("Covariate in model is", cov[i]))
+    dfc$covc <- scale(df[, cov[i]], center=center)
+
+    # restrict data frame to ids that acutally have the covariate
+    dfc <- subset(dfc, !is.na(covc))
+
+    # first test influence of covariate
+    m1  <- calcmlm(form=as.formula(forms[1]),
+                   df=dfc,  REML=FALSE)
+    m2  <- calcmlm(form=as.formula(forms[2]),
+                   df=dfc,  REML=FALSE)
+    print(anova(m1, m2))
+
+    # Then test if interaction remains significant with covariate
+    m3  <- calcmlm(form=as.formula(forms[3]),
+                   df=dfc,  REML=FALSE)
+    print(anova(m2, m3))
+    rm(dfc)
+  }
+
+  #detach("package:lmerTest", unload=TRUE)
+}
+
+doplotbar <- function(df=df, rng=NULL, ylim=NULL,
+                      main=NULL, yaxt=NULL, ylb=NULL) {
+  # Produce the bar plots
+  #
+  # Args:
+  # Returns:
+  
+#  m <- matrix(ncol=2, nrow=2, df$m[rng]) 
+#  e <- matrix(ncol=2, nrow=2, df$eb[rng]) 
+#  #colnames(m) <- rep(levels(df$group), 1)
+#  colnames(m) <- c("Plac", "Praz")
+#  rownames(m) <- levels(df$stim)
+#  colnames(e) <- rep(levels(df$group), 1)
+#  rownames(e) <- levels(df$stim)
+  plotbar(df=df, rng=rng, ylim=ylim, col=c("gray54", "white"),
+          main=main, yaxt=yaxt, ylb=ylb)
+}
+
+ 
+
+# Main program
+# greeting
+cat("This is the analysis of the prazosin-study\n")
+cat("Output of citation() is:\n")
+citation()
+
+# load dataset (comma seperated format)
+fn      <- "../data/prazosin.csv"
+p       <- readdat(fn=fn, resptype="cr", exclids=c(25, 28))
+
+# remove first CS- in ext
+#p$ctrial[(!p$stage=="Acquisition")&p$stim=="CSminus"] <- p$ctrial[(!p$stage=="Acquisition")&p$stim=="CSminus"] - 1 
+#p <- subset(p, !ctrial==0)
+
+# set the outcome measure here
+#outcome <- "logdcm1"
+#ylab    <- "Log aSNA Amplitude (units)"
+#outcome <- "DCM1"
+outcome <- "peakscoresqrtn"
+ylab    <- "SQRT SCR (mS)"
+
+# set outcome in data frame
+p$outcome <- p[, outcome]
+
+# Covariates at baseline
+covs    <- c("Age", "Gender", "stait", "ShockerLevel",
+             "HeartRateBaseline", "HeartRate90min", "BPSysBaseline",
+             "BPSys90min", "BPDiaBaseline", "BPDia90min")
+
+# summarize by stages
+out <- calcstages(p)
+dfm <- out[[5]]
+dfm$stimdiff <- dfm$mdiff
+p <- merge(p, subset(dfm, select=c(ID, group, stage, stimdiff)),
+           all=TRUE)
+dfm2 <- out[[4]]
+dfm2$stimmean <- dfm2$m
+p <- merge(p, subset(dfm2, select=c(ID,group,  stage, stim, stimmean)),
+           all=TRUE)
+
+dfm3 <- out[[2]]
+dfm3$stimdiff <- dfm3$mdiff
+
+pdfm3 <- merge(subset(p, select=c(ID, group, stage, phase)),
+               subset(dfm3, select=c(ID, group, stage, phase, stimdiff)),
+               all=TRUE)
+
+dfm4 <- out[[1]]
+dfm4$stimmean <- dfm4$m
+pdfm4 <- merge(subset(p, select=c(ID, group, stage, phase, stim)),
+               subset(dfm4, select=c(ID, group, stage, phase, stimmean)),
+               all=TRUE)
+
+
+
+# Include only ids with positive acquisition
+# This should not be done
+ids <- getposacqids(p)
+#pp <- subset(p, ID %in% ids)
+
+
+#-----------------------------------------------------------------------
+# Plots
+#-----------------------------------------------------------------------
+pdf("../output/figures/prazosin_plots.pdf", paper="a4r",
+    width=0, height=0)
+
+# main figure
+#plottrialwise(subset(p, !(ID==23&stage=="Acquisition")), mxyp=0.35)
+plottrialwise(p, mxyp=0.9)
+dev.off()
+
+
+pdf("../output/figures/prazosin_analysis.pdf")
+
+# histogram of stim diff in acq
+plothist(unique(subset(p, stage=="Acquisition", select=stimdiff)),
+         x2lb="Stimulus Discrimination in Acquisition")
+
+
+# summaries of stim diff by group, stage, phase
+dfm <- out[[3]]
+lb  <- paste(dfm$group, dfm$stage, dfm$phase)
+plotgsp(df=dfm, lb=lb)
+
+
+
+pdf('../output/figures/prazosin_barplots.pdf')
+
+plothist(unique(subset(p, stage=="Acquisition", select=stimdiff)),
+         x2lb="Stimulus Discrimination in Acquisition")
+
+par(mar=c(7, 2, 2, 0), oma=c(4, 4, 2, 4))
+l <- layout(matrix(c(1, 1, 2, 2, 3, 3, c(4:9)), ncol=6, byrow=TRUE))
+#layout.show(l)
+
+# non centrality parameters
+ncp  <- abs(qt(0.05/2, 19-1))
+dfm <- out[[1]]
+dfmm <- ddply(dfm, c("group", "stage", "stim"), summarize,
+              mm=mean(m, na.rm=TRUE),
+              sd=sd(m, na.rm=TRUE),
+              n=sum(!is.na(m)),
+              eb=ncp*sd/sqrt(n))
+dfmm <- dfmm[order(dfmm$stage, dfmm$group, rev(dfmm$stim)),]
+doplotbar(df=dfmm, c(1:4), ylim=c(0, 0.3), main=levels(dfmm$stage)[1])
+mtext("Log aSNA Amplitude (units)", 2, 2, cex=1.5, font=2, outer=TRUE)
+text(1.25, 0.175, "**", cex=1.2)
+text(3.5, 0.175, "***", cex=1.2)
+
+doplotbar(dfmm, c(5:8), ylim=c(0, 0.3), main=levels(dfmm$stage)[2], yaxt="n")
+text(3.5, 0.26, "***", cex=1.2)
+
+
+doplotbar(dfmm, c(9:12), ylim=c(0, 0.3), main="Re-extinction", yaxt="n")
+text(3.5, 0.23, "***", cex=1.2)
+
+dfmm <- ddply(dfm, c("group", "stage", "phase", "stim"), summarize,
+              mm=mean(m, na.rm=TRUE),
+              sd=sd(m, na.rm=TRUE),
+              n=sum(!is.na(m)),
+              eb=sd/sqrt(n))
+dfmm <- dfmm[order(dfmm$stage, dfmm$group, rev(dfmm$stim)),]
+dfmm <- dfmm[order(dfmm$stage, dfmm$phase, dfmm$group, rev(dfmm$stim)),]
+
+doplotbar(dfmm, c(1:4), ylim=c(0, 0.35), "Early")
+text(1.25, 0.21, "*", cex=1.2)
+text(3.5, 0.21, "*", cex=1.2)
+
+#text(5.25, 0.35, levels(dfmm$stage)[1], xpd=NA, font=2, cex=1.2)
+doplotbar(dfmm, c(5:8), ylim=c(0, 0.35), "Late", "n")
+text(3.5, 0.16, "*", cex=1.2)
+
+doplotbar(dfmm, c(9:12), ylim=c(0, 0.35), "Early", "n")
+text(3.5, 0.31, "*", cex=1.2)
+
+#text(5.25, 0.35, levels(dfmm$stage)[2], xpd=NA, font=2, cex=1.2)
+doplotbar(dfmm, c(13:16), ylim=c(0, 0.35), "Late", "n")
+text(1.25, 0.24, "**", cex=1.2)
+text(3.5, 0.24, "**", cex=1.2)
+
+doplotbar(dfmm, c(17:20), ylim=c(0, 0.35), "Early", "n")
+text(3.5, 0.27, "*", cex=1.2)
+#text(5.25, 0.35, levels(dfmm$stage)[3], xpd=NA, font=2, cex=1.2)
+doplotbar(dfmm, c(21:24), ylim=c(0, 0.35), "Late", "n")
+text(3.5, 0.21, "**", cex=1.2)
+
+legend(-16.5, -0.1, legend=c("CSplus", "CSminus"), bty="n",
+       fill=c("gray52", "white"), xpd=NA)
+
+dev.off()
+
+#-----------------------------------------------------------------------
+# Bottom up tests
+#-----------------------------------------------------------------------
+out <- calcstages(p)
+dfm <- out[[1]]
+teststagestim(subset(dfm, group=="Placebo"&stage=="Acquisition"&
+                          phase=="early"))
+teststagestim(subset(dfm, group=="Placebo"&stage=="Acquisition"&
+                          phase=="late"))
+teststagestim(subset(dfm, group=="Prazosin"&stage=="Acquisition"&
+                          phase=="early"))
+teststagestim(subset(dfm, group=="Prazosin"&stage=="Acquisition"&
+                          phase=="late"))
+teststagestim(subset(dfm, group=="Placebo"&stage=="Extinction"&
+                          phase=="early"))
+teststagestim(subset(dfm, group=="Placebo"&stage=="Extinction"&
+                          phase=="late"))
+teststagestim(subset(dfm, group=="Prazosin"&stage=="Extinction"&
+                          phase=="early"))
+teststagestim(subset(dfm, group=="Prazosin"&stage=="Extinction"&
+                          phase=="late"))
+teststagestim(subset(dfm, group=="Placebo"&stage=="Retrieval"&
+                          phase=="early"))
+teststagestim(subset(dfm, group=="Placebo"&stage=="Retrieval"&
+                          phase=="late"))
+teststagestim(subset(dfm, group=="Prazosin"&stage=="Retrieval"&
+                          phase=="early"))
+teststagestim(subset(dfm, group=="Prazosin"&stage=="Retrieval"&
+                          phase=="late"))
+
+dfm <- out[[4]]
+teststagestim(subset(dfm, group=="Placebo"&stage=="Acquisition"))
+teststagestim(subset(dfm, group=="Prazosin"&stage=="Acquisition"))
+teststagestim(subset(dfm, group=="Placebo"&stage=="Extinction"))
+teststagestim(subset(dfm, group=="Prazosin"&stage=="Extinction"))
+teststagestim(subset(dfm, group=="Placebo"&stage=="Retrieval"))
+teststagestim(subset(dfm, group=="Prazosin"&stage=="Retrieval"))
+
+#-----------------------------------------------------------------------
+# Post-hoc tests requested by reviewers
+#-----------------------------------------------------------------------
+u <- unique(subset(p, !ID==8, select=c(ID, group, stage, phase,
+                                       stimdiff)))
+u$ID <- factor(u$ID)
+a <- aov(stimdiff ~ group * stage + Error(ID/stage), u)
+summary(a)
+
+u <- unique(subset(p, !ID==8, select=c(ID, group, stage, stim, stimmean)))
+u$ID <- factor(u$ID)
+a <- aov(stimmean ~ group * stage * stim + Error(ID/(stage*stim)), u)
+summary(a)
+
+u <- unique(subset(p, !ID==8, select=c(ID, group, stage, phase,
+                                       stimdiff)))
+a <- aov(stimdiff ~ phase + Error(ID/phase),
+         subset(u, stage=="Acquisition"&group=="Placebo"))
+summary(a)
+a <- aov(stimdiff ~ phase + Error(ID/phase),
+         subset(u, stage=="Acquisition"&group=="Prazosin"))
+summary(a)
+
+
+u <- unique(subset(pdfm4, !ID==8, select=c(ID, group, stage, phase,
+                                           stim, stimmean)))
+a <- aov(stimmean ~ phase + Error(ID/phase),
+         subset(u, stage=="Extinction"&group=="Placebo"&
+                stim=="CSplus"))
+summary(a)
+
+a <- aov(stimmean ~ phase + Error(ID/phase),
+         subset(u, stage=="Extinction"&group=="Prazosin"&
+                stim=="CSplus"))
+summary(a)
+a <- aov(stimmean ~ phase + Error(ID/phase),
+         subset(u, stage=="Retrieval"&group=="Placebo"&
+                stim=="CSplus"))
+summary(a)
+a <- aov(stimmean ~ phase + Error(ID/phase),
+         subset(u, stage=="Retrieval"&group=="Prazosin"&
+                stim=="CSplus"))
+summary(a)
+
+a <- aov(stimmean ~ phase + Error(ID/phase),
+         subset(u, stage=="Extinction"&group=="Placebo"&
+                stim=="CSminus"))
+summary(a)
+a <- aov(stimmean ~ phase + Error(ID/phase),
+         subset(u, stage=="Extinction"&group=="Prazosin"&
+                stim=="CSminus"))
+summary(a)
+a <- aov(stimmean ~ phase + Error(ID/phase),
+         subset(u, stage=="Retrieval"&group=="Placebo"&
+                stim=="CSminus"))
+summary(a)
+a <- aov(stimmean ~ phase + Error(ID/phase),
+         subset(u, stage=="Retrieval"&group=="Prazosin"&
+                stim=="CSminus"))
+summary(a)
+
+
+
+a <- aov(stimmean ~ phase + Error(ID/phase),
+         subset(u, stage=="Extinction"&group=="Prazosin"))
+summary(a)
+
+
+# late acquisition to early extinction
+u <- unique(subset(pdfm3, !ID==8, select=c(ID, group, stage, phase,
+                                           stimdiff)))
+
+a <- aov(stimdiff ~ group + Error(ID),
+         subset(u, (stage=="Acquisition"&phase=="late")))
+summary(a)
+
+a <- aov(stimdiff ~ group * stage + Error(ID/stage),
+         subset(u, (stage=="Acquisition"&phase=="late")|
+                   (stage=="Extinction"&phase=="early")))
+summary(a)
+
+
+# late extinction to early re-extinction
+a <- aov(stimdiff ~ group * stage + Error(ID/stage),
+         subset(u, (stage=="Extinction"&phase=="late")|
+                   (stage=="Retrieval"&phase=="early")))
+summary(a)
+
+
+
+
+# spontaneous recovery 
+a <- aov(stimdiff ~ group * stage + Error(ID/stage),
+         subset(u, (stage=="Extinction"&phase=="late")|
+                   (stage=="Retrieval"&phase=="early")))
+summary(a)
+
+# spontaneous recover within placebo group
+a <- aov(stimdiff ~ stage + Error(ID),
+         subset(u, group=="Placebo"&
+                   (stage=="Extinction"&phase=="late")|
+                   (stage=="Retrieval"&phase=="early")))
+summary(a)
+
+# spontaneous recover within prazosin group
+a <- aov(stimdiff ~ stage + Error(ID),
+         subset(u, group=="Prazosin"&
+                   (stage=="Extinction"&phase=="late")|
+                   (stage=="Retrieval"&phase=="early")))
+summary(a)
+
+
+a <- aov(stimdiff ~ group * phase + Error(ID/phase),
+         subset(u, (stage=="Acquisition")))
+summary(a)
+
+a <- aov(stimdiff ~ group * phase + Error(ID/phase),
+         subset(u, (stage=="Extinction")))
+summary(a)
+
+a <- aov(stimdiff ~ group * phase + Error(ID/phase),
+         subset(u, (stage=="Retrieval")))
+summary(a)
+
+
+# request in revision #2: early vs. late
+# by id, stage, phase, stim
+dfm <- out[[1]]
+dfm$stimmean <- dfm$m
+u <- unique(subset(dfm, !ID==8, select=c(ID, group, stage, phase,
+                                       stim, 
+                                       stimmean)))
+
+for (i in 1:nlevels(u$stage)) { 
+  print(levels(u$stage)[i])
+  a <- aov(stimmean ~ group * phase * stim + Error(ID/(phase*stim)),
+           data=subset(u, stage==levels(u$stage)[i]))
+  print(summary(a))
+}
+
+# all sessions in one model
+#a <- aov(stimmean ~ group * stage * phase * stim +
+#             Error(ID/stage * phase * stim),
+#         subset(u))
+#summary(a)
+
+#-----------------------------------------------------------------------
+# Primary analysis
+#-----------------------------------------------------------------------
+fcts <- c("group", "stage", "stim")
+forms <- c("outcome ~ ctrialc + group + stage + stim +
+            group:stage + stage:stim + group:stim + (0 + stage*stim|ID)",
+
+           "outcome ~ ctrialc + group*stage*stim + (0 + stage*stim|ID)",
+
+           "outcome ~ group*stage*stim + (0 + stage*stim|ID)",
+
+           "outcome ~ ctrialc*group*stage*stim + (0 + stage*stim|ID)",
+
+           "outcome ~ ctrialc + staitc + group*stage*stim +
+            (0+stage*stim|ID)",
+
+           "outcome ~ ctrialc + staitc + group + stage + stim +
+            group:stage + stage:stim +
+            group:stim + (0 + stage*stim|ID)")
+
+cv <- matrix(c(0,  1,  0, -1,  0,  0,  0, -1,  0,  1,  0,  0,
+               1,  0, -1,  0,  0,  0, -1,  0,  1,  0,  0,  0,
+               0,  0,  0,  0,  1, -1,  0,  0,  0,  0, -1,  1,  
+               0,  0,  1, -1,  0,  0,  0,  0, -1,  1,  0,  0,  
+              -1, -1,  0,  0,  0,  0,  1,  1,  0,  0,  0,  0,  
+               1, -1,  0,  0,  0,  0, -1,  1,  0,  0,  0,  0,
+              -1,  0,  0,  0,  0,  0,  1,  0,  0,  0,  0,  0,  
+               0, -1,  0,  0,  0,  0,  0,  1,  0,  0,  0,  0,
+              -1,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+               0,  0, -1,  1,  0,  0,  0,  0,  0,  0,  0,  0,
+               0,  0,  0,  0, -1,  1,  0,  0,  0,  0,  0,  0,
+               0,  0,  0,  0,  0,  0, -1,  1,  0,  0,  0,  0,
+               0,  0,  0,  0,  0,  0,  0,  0, -1,  1,  0,  0,
+               0,  0,  0,  0,  0,  0,  0,  0,  0,  0, -1,  1),
+              nrow=14, ncol=12, byrow=TRUE)
+
+
+#cv <- matrix(c(0,  1,  0, -1,  0,  0,  0, -1,  0,  1,  0,  0,
+#               1,  0, -1,  0,  0,  0, -1,  0,  1,  0,  0,  0,
+#               0,  0,  0,  0,  1, -1,  0,  0,  0,  0, -1,  1,  
+#               0,  0,  1, -1,  0,  0,  0,  0, -1,  1,  0,  0,  
+#              -1, -1,  0,  0,  0,  0,  1,  1,  0,  0,  0,  0,  
+#               1, -1,  0,  0,  0,  0, -1,  1,  0,  0,  0,  0),
+#              nrow=6, ncol=12, byrow=TRUE)
+
+#cl   <- list("Prazosin, Acq - Ext"            =cv[1, ],
+
+#cl   <- list("Prazosin, Acq - Ext"            =cv[1, ],
+#             "Placebo, Acq - Ext"             =cv[2, ],
+#             "Re-extinction, Prazosin - Placebo"  =cv[3, ],
+#             "Extinction, Prazosin - Placebo" =cv[4, ],	
+#             "Acquisition, pooled"          =cv[5, ],	
+#             "Acquisition, Prazosin - Placebo"=cv[6, ])
+
+cl   <- list("Re-extinction, Prazosin - Placebo"  =cv[3, ],
+             "Extinction, Prazosin - Placebo"     =cv[4, ],	
+             "Acquisition, pooled"                =cv[5, ],	
+             "Acquisition, Prazosin - Placebo"    =cv[6, ],
+             "Acquisition, Placebo"               =cv[7, ],
+             "Acquisition, Prazosin"              =cv[8, ],
+             "Acquisition, CS-"                   =cv[9, ],
+             "Extinction,  CS-"                   =cv[10, ],
+             "Re-extinction, CS-"                 =cv[11, ],
+             "Acquisition, CS+"                   =cv[12, ],
+             "Extinction,  CS+"                   =cv[13, ],
+             "Re-extinction, CS+"                 =cv[14, ])
+
+#cl   <- list("Re-extinction, Prazosin - Placebo"  =cv[3, ],
+#             "Extinction, Prazosin - Placebo"     =cv[4, ],	
+#             "Acquisition, pooled"                =cv[5, ],	
+#             "Acquisition, Prazosin - Placebo"    =cv[6, ])
+
+
+
+
+# run analysis
+pdf()
+tmp  <- doanalysis(df=p, covs=covs, factors=fcts,
+                   contrlist=cl, contrfn=NULL, formulas=forms)
+dev.off()
+
+#-----------------------------------------------------------------------
+# Assess influence of covariates on final model 
+#-----------------------------------------------------------------------
+p     <- readdat(fn=fn, resptype="cr", exclids=c(25, 28))
+p$outcome <- p[, outcome]
+forms <- c(
+           "outcome ~ ctrialc + group*stage*stim +
+            (0 + stage*stim|ID)",
+           "outcome ~ ctrialc + covc + group*stage*stim +
+            (0 + stage*stim|ID)",
+
+           "outcome ~ ctrialc + covc + group + stage + stim +
+            group:stage + stage:stim +
+            group:stim + (0 + stage*stim|ID)"
+           )
+tmp   <- calcmlmwithcov(df=p, cov=covs, center=TRUE, forms=forms)
+
+dev.off()
+
+
+# simulation showing significant interaction with non-significant main
+# effects
+
+# simulate data
+set.seed(876170)
+a1    <- rnorm(n=30, mean=0.30, sd=0.02)
+a2    <- rnorm(n=30, mean=0.35, sd=0.12)
+b1    <- rnorm(n=30, mean=0.35, sd=0.12)
+b2    <- rnorm(n=30, mean=0.30, sd=0.10)
+
+# graph the data
+#par(mar=c(12, 6, 6, 26), oma=c(2, 2, 2, 2))
+par(mar=c(7, 7, 7, 7), oma=c(2, 2, 2, 2))
+xlab  <- c("a1", "a2", "b1", "b2")
+means <- c(mean(a1), mean(a2), mean(b1), mean(b2))
+sds   <- c(sd(a1), sd(a2), sd(b1), sd(b2))
+ncp   <- abs(qt(0.05/2, 30-1))
+cis   <- sds/sqrt(30) * ncp
+bp    <- barplot(means, names=xlab, ylab="Mean with 95% CI",
+              ylim=c(0, 0.55), cex.lab=1.5)
+
+mses  <- means - cis 
+pses  <- means + cis
+arrows(bp, mses, bp, pses, length=0.00,
+                      angle=90, code=3, lwd=1.2)
+
+# horizontal markers
+# main effect of a
+lines(bp[1:2], c(0.45, 0.45))
+lines(bp[c(1,1)], c(0.45, 0.44))
+lines(bp[c(2,2)], c(0.45, 0.44))
+text(bp[1]+((bp[2]-bp[1])/2), 0.46,"n.s.")
+
+# main effect of b
+lines(bp[3:4], c(0.45, 0.45))
+lines(bp[c(3, 3)], c(0.45, 0.44))
+lines(bp[c(4, 4)], c(0.45, 0.44))
+text(bp[3]+((bp[4]-bp[3])/2), 0.46,"n.s.")
+
+# interaction
+lines(c((bp[1]+bp[2])/2, (bp[3]+bp[4])/2),
+      c(0.5, 0.5))
+
+lines(rep(bp[1]+(bp[2]-bp[1])/2, 2), c(0.5, 0.49))
+lines(rep(bp[3]+(bp[4]-bp[3])/2, 2), c(0.5, 0.49))
+text(2.5, 0.51,"*", cex=1.2)
+
+
+# test interaction
+t.test(x=(a1-a2), y=(b1-b2), alternative="two.sided") 
+
+# test main effect of a
+t.test(x=a1, y=a2, alternative="two.sided") 
+
+# test main effect of b
+t.test(x=b1, y=b2, alternative="two.sided") 
